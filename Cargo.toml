@@ -1,0 +1,13 @@
+[package]
+name = "async-nats-easy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-nats = "0.38.0"
+async-trait = "0.1.83"
+bytes = "1.9.0"
+futures = "0.3.31"
+serde = { version = "1.0.215", features = ["derive"] }
+tokio = { version = "1.42.0", features = ["rt"] }
+tracing = "0.1.41"
