@@ -1,3 +1,4 @@
+pub use async_nats::Error as NatsError;
 pub use async_nats::Message;
 use async_nats::{Client, ConnectOptions, Subscriber};
 pub use async_trait::async_trait;
@@ -7,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument};
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Subject {
     UsersAuth,
