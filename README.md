@@ -80,10 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Handling
 
-```rust
-```
 ### Handling
 
 To handle messages from a subject, you need to implement the `RequestProcessor` trait and use the `handle` method of `NatsClient`.
