@@ -2,6 +2,13 @@
 name = "async-nats-easy"
 version = "0.1.0"
 edition = "2021"
+authors = ["Oleg Pogoraev <merizo.labs@gmail.com>"]
+description = "An easy-to-use async NATS client library"
+license = "MIT"
+repository = "https://github.com/oblivisheee/async-nats-easy"
+documentation = "https://docs.rs/async-nats-easy"
+keywords = ["async", "nats", "client", "library"]
+categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 async-nats = "0.38.0"
