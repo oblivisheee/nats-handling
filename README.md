@@ -80,6 +80,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Handling
+
+```rust
+```
+### Handling
+
+To handle messages from a subject, you need to implement the `RequestProcessor` trait and use the `handle` method of `NatsClient`.
+
+```rust
+use async_nats_easy::{NatsClient, RequestProcessor, Message, async_trait};
+use bytes::Bytes;
+
+#[derive(Clone, Debug)]
+struct MyProcessor;
+
+#[async_trait]
+impl RequestProcessor for MyProcessor {
+    async fn process(&self, message: Message) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("Processing message: {:?}", message);
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = NatsClient::new(&["nats://127.0.0.1:4222"]).await?;
+    let processor = MyProcessor;
+    let handle = client.handle("subject", processor).await?;
+    Ok(())
+}
+```
+
+### Handling Multiple Subjects
+
+You can also handle messages from multiple subjects using the `handle_multiple` method.
+
+```rust
+use async_nats_easy::{NatsClient, RequestProcessor};
+use async_trait::async_trait;
+use async_nats::Message;
+use bytes::Bytes;
+
+#[derive(Clone, Debug)]
+struct MyProcessor;
+
+#[async_trait]
+impl RequestProcessor for MyProcessor {
+    async fn process(&self, message: Message) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("Processing message: {:?}", message);
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = NatsClient::new(&["nats://127.0.0.1:4222"]).await?;
+    let processor = MyProcessor;
+    let handle = client.handle_multiple(vec!["subject1", "subject2"], processor).await?;
+    Ok(())
+}
+```
 ## License
 
 This project is licensed under the MIT License.

@@ -1,6 +1,6 @@
 [package]
 name = "async-nats-easy"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Oleg Pogoraev <merizo.labs@gmail.com>"]
 description = "An easy-to-use async NATS client library"
