@@ -4,22 +4,9 @@ use async_nats::{Client, ConnectOptions, Subscriber};
 pub use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument};
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Subject {
-    UsersAuth,
-}
-
-impl ToString for Subject {
-    fn to_string(&self) -> String {
-        match self {
-            Subject::UsersAuth => "users_auth".to_string(),
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct Handle<T, R> {
@@ -108,13 +95,27 @@ impl NatsClient {
         let moved_sub = subscriber.clone();
         let moved_processor = processor.clone();
         let moved_subject = subject.clone();
+        let client_clone = self.clone();
 
         tokio::spawn(async move {
             info!("Started message processing loop for {}", moved_subject);
             while let Some(message) = moved_sub.lock().await.next().await {
                 debug!("Processing message from subject: {}", message.subject);
-                if let Err(e) = moved_processor.process(message).await {
-                    error!("Error processing message: {:?}", e);
+                match moved_processor.process(message.clone()).await {
+                    Ok(reply) => {
+                        if let Some(reply) = reply {
+                            if let Err(e) = client_clone.reply(reply).await {
+                                error!("Error replying to message: {:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error processing message: {:?}", e);
+                        let err_reply = ReplyErrorMessage(e);
+                        if let Err(e) = client_clone.reply_err(err_reply, message).await {
+                            error!("Error replying to message: {:?}", e);
+                        }
+                    }
                 }
             }
         });
@@ -129,20 +130,40 @@ impl NatsClient {
     #[instrument]
     pub async fn reply(
         &self,
-        subject: String,
-        reply: String,
-        payload: Bytes,
+        reply: ReplyMessage,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        debug!("Sending reply to subject: {}, reply: {}", subject, reply);
+        debug!(
+            "Sending reply to subject: {}, reply: {}",
+            reply.subject, reply.reply
+        );
         self.client
-            .publish_with_reply(subject.clone(), reply.clone(), payload)
+            .publish_with_reply(reply.subject.clone(), reply.reply.clone(), reply.payload)
             .await
             .map_err(|e| {
-                error!("Failed to reply to {}: {}", subject, e);
+                error!("Failed to reply to {}: {}", reply.subject, e);
                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
             })?;
-        debug!("Successfully sent reply to {}", subject);
+        debug!("Successfully sent reply to {}", reply.subject);
         Ok(())
+    }
+    async fn reply_err(
+        &self,
+        err: ReplyErrorMessage,
+        msg_source: Message,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let reply = ReplyMessage {
+            subject: msg_source.subject.to_string(),
+            reply: msg_source
+                .reply
+                .clone()
+                .unwrap_or_else(|| {
+                    eprint!("No reply subject");
+                    "".to_string().into()
+                })
+                .to_string(),
+            payload: err.0.to_string().into(),
+        };
+        self.reply(reply).await
     }
 
     #[instrument(skip(processor))]
@@ -159,16 +180,9 @@ impl NatsClient {
             let moved_sub = subscriber.clone();
             let moved_processor = processor.clone();
             let subject = subject.to_string();
+            let client_clone = self.clone();
 
-            tokio::spawn(async move {
-                info!("Started message processing loop for {}", subject);
-                while let Some(message) = moved_sub.lock().await.next().await {
-                    debug!("Processing message from subject: {}", message.subject);
-                    if let Err(e) = moved_processor.process(message).await {
-                        error!("Error processing message: {:?}", e);
-                    }
-                }
-            });
+            self.handle(&subject, processor).await?;
             subs.push(subscriber);
         }
         Ok(MutlipleHandle {
@@ -207,9 +221,26 @@ impl<R: RequestProcessor> Handle<NatsClient, R> {
 }
 
 #[async_trait]
-pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug {
+pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug + std::marker::Copy {
     async fn process(
         &self,
         message: Message,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<Option<ReplyMessage>, Box<dyn std::error::Error + Send + Sync>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct ReplyMessage {
+    pub subject: String,
+    pub reply: String,
+    pub payload: Bytes,
+}
+
+pub struct ReplyErrorMessage(pub Box<dyn std::error::Error + Send + Sync>);
+
+pub fn reply(msg: Message, payload: Bytes) -> ReplyMessage {
+    ReplyMessage {
+        subject: msg.subject.clone().to_string(),
+        reply: msg.reply.clone().unwrap_or_else(|| "".into()).to_string(),
+        payload,
+    }
 }
