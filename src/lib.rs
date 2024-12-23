@@ -103,15 +103,18 @@ impl NatsClient {
                 println!("msg:{:?}", message);
                 match moved_processor.process(message.clone()).await {
                     Ok(reply) => {
+                        debug!("Successfully processed message");
                         if let Err(e) = client_clone.reply(reply).await {
-                            error!("Error replying to message: {:?}", e);
+                            error!("Failed to reply to message: {}", e);
                         }
                     }
                     Err(e) => {
-                        error!("Error processing message: {:?}", e);
-                        let err_reply = ReplyErrorMessage(e);
-                        if let Err(e) = client_clone.reply_err(err_reply, message).await {
-                            error!("Error replying to message: {:?}", e);
+                        error!("Failed to process message: {}", e);
+                        if let Err(e) = client_clone
+                            .reply_err(ReplyErrorMessage(e), message.clone())
+                            .await
+                        {
+                            error!("Failed to reply to message: {}", e);
                         }
                     }
                 }
@@ -177,7 +180,7 @@ impl NatsClient {
             let subscriber = Arc::new(Mutex::new(self.subscribe(subject.to_string()).await?));
             let subject = subject.to_string();
 
-            self.handle(&subject, processor).await?;
+            self.handle(&subject, processor.clone()).await?;
             subs.push(subscriber);
         }
         Ok(MutlipleHandle {
@@ -216,7 +219,7 @@ impl<R: RequestProcessor> Handle<NatsClient, R> {
 }
 
 #[async_trait]
-pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug + std::marker::Copy {
+pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug {
     async fn process(
         &self,
         message: Message,
