@@ -7,7 +7,6 @@ use futures::StreamExt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument};
-
 #[derive(Debug)]
 pub struct Handle<T, R> {
     client: T,
@@ -101,12 +100,11 @@ impl NatsClient {
             info!("Started message processing loop for {}", moved_subject);
             while let Some(message) = moved_sub.lock().await.next().await {
                 debug!("Processing message from subject: {}", message.subject);
+                println!("msg:{:?}", message);
                 match moved_processor.process(message.clone()).await {
                     Ok(reply) => {
-                        if let Some(reply) = reply {
-                            if let Err(e) = client_clone.reply(reply).await {
-                                error!("Error replying to message: {:?}", e);
-                            }
+                        if let Err(e) = client_clone.reply(reply).await {
+                            error!("Error replying to message: {:?}", e);
                         }
                     }
                     Err(e) => {
@@ -177,10 +175,7 @@ impl NatsClient {
         for subject in subjects.iter() {
             debug!("Setting up handler for subject: {}", subject);
             let subscriber = Arc::new(Mutex::new(self.subscribe(subject.to_string()).await?));
-            let moved_sub = subscriber.clone();
-            let moved_processor = processor.clone();
             let subject = subject.to_string();
-            let client_clone = self.clone();
 
             self.handle(&subject, processor).await?;
             subs.push(subscriber);
@@ -225,7 +220,7 @@ pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug + std::marker:
     async fn process(
         &self,
         message: Message,
-    ) -> Result<Option<ReplyMessage>, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<ReplyMessage, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 #[derive(Clone, Debug)]
@@ -237,7 +232,8 @@ pub struct ReplyMessage {
 
 pub struct ReplyErrorMessage(pub Box<dyn std::error::Error + Send + Sync>);
 
-pub fn reply(msg: Message, payload: Bytes) -> ReplyMessage {
+pub fn reply(msg: &Message, payload: Bytes) -> ReplyMessage {
+    println!("Replying to message: {:?}", msg);
     ReplyMessage {
         subject: msg.subject.clone().to_string(),
         reply: msg.reply.clone().unwrap_or_else(|| "".into()).to_string(),
