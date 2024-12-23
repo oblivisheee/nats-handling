@@ -18,6 +18,7 @@ impl RequestProcessor for MyProcessor {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::fmt()
         .with_max_level(tracing::Level::DEBUG)
+        .with_env_filter(tracing_subscriber::EnvFilter::new("async_nats=off"))
         .init();
     let client = NatsClient::new(&["nats://127.0.0.1:4222"]).await.unwrap();
     let processor = MyProcessor;
