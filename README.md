@@ -1,8 +1,8 @@
-# async-nats-easy
+# nats-handling
 
 ## Overview
 
-`async-nats-easy` is a Rust library that provides an easy-to-use interface for interacting with NATS, an open-source messaging system. This library leverages asynchronous programming to handle NATS operations efficiently.
+`nats-handling` is a Rust library that provides an easy-to-use interface for interacting with NATS, an open-source messaging system. This library leverages asynchronous programming to handle NATS operations efficiently.
 
 ## Features
 
@@ -18,7 +18,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-async-nats-easy = "0.1.5"
+nats-handling = "0.1.0"
 ```
 
 ## Usage
