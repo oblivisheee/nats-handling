@@ -26,7 +26,7 @@ nats-handling = "0.1.0"
 ### Connecting to NATS
 
 ```rust
-use async_nats_easy::NatsClient;
+use nats_handling::NatsClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Publishing a Message
 
 ```rust
-use async_nats_easy::NatsClient;
+use nats_handling::NatsClient;
 use bytes::Bytes;
 
 #[tokio::main]
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Subscribing to a Subject
 
 ```rust
-use async_nats_easy::NatsClient;
+use nats_handling::NatsClient;
 use futures::StreamExt;
 
 #[tokio::main]
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Request-Reply Pattern
 
 ```rust
-use async_nats_easy::NatsClient;
+use nats_handling::NatsClient;
 use bytes::Bytes;
 
 #[tokio::main]
@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 To handle messages from a subject, you need to implement the `RequestProcessor` trait and use the `handle` method of `NatsClient`.
 
 ```rust
-use async_nats_easy::{NatsClient, RequestProcessor, Message, async_trait};
+use nats_handling::{NatsClient, RequestProcessor, Message, async_trait};
 use bytes::Bytes;
 
 #[derive(Clone, Debug)]
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 You can also handle messages from multiple subjects using the `handle_multiple` method.
 
 ```rust
-use async_nats_easy::{NatsClient, RequestProcessor};
+use nats_handling::{NatsClient, RequestProcessor};
 use async_trait::async_trait;
 use async_nats::Message;
 use bytes::Bytes;
