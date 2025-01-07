@@ -1,12 +1,14 @@
 pub use async_nats::Error as NatsError;
 pub use async_nats::Message;
+
 use async_nats::{Client, ConnectOptions, Subscriber};
 pub use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, trace};
+
 #[derive(Debug)]
 pub struct Handle<T, R> {
     client: T,
@@ -23,6 +25,7 @@ impl NatsClient {
     #[instrument]
     pub async fn new(bind: &[&str]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         info!("Connecting to NATS server at {:?}", bind);
+        trace!("Creating ConnectOptions");
         let client = ConnectOptions::new().connect(bind).await.map_err(|e| {
             error!("Failed to connect to NATS: {}", e);
             Box::new(e) as Box<dyn std::error::Error + Send + Sync>
@@ -37,6 +40,7 @@ impl NatsClient {
         subject: String,
     ) -> Result<Subscriber, Box<dyn std::error::Error + Send + Sync>> {
         info!("Subscribing to subject: {}", subject);
+        trace!("Calling client.subscribe with subject: {}", subject);
         let subscription = self.client.subscribe(subject.clone()).await.map_err(|e| {
             error!("Failed to subscribe to {}: {}", subject, e);
             Box::new(e) as Box<dyn std::error::Error + Send + Sync>
@@ -52,6 +56,7 @@ impl NatsClient {
         payload: Bytes,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         debug!("Publishing message to subject: {}", subject);
+        trace!("Payload size: {}", payload.len());
         self.client
             .publish(subject.clone(), payload)
             .await
@@ -70,6 +75,7 @@ impl NatsClient {
         payload: Bytes,
     ) -> Result<Message, Box<dyn std::error::Error + Send + Sync>> {
         debug!("Sending request to subject: {}", subject);
+        trace!("Payload size: {}", payload.len());
         let response = self
             .client
             .request(subject.clone(), payload)
@@ -79,6 +85,7 @@ impl NatsClient {
                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
             })?;
         debug!("Received response from {}", subject);
+        trace!("Response payload size: {}", response.payload.len());
         Ok(response)
     }
 
@@ -100,7 +107,7 @@ impl NatsClient {
             info!("Started message processing loop for {}", moved_subject);
             while let Some(message) = moved_sub.lock().await.next().await {
                 debug!("Processing message from subject: {}", message.subject);
-                println!("msg:{:?}", message);
+                trace!("Message payload size: {}", message.payload.len());
                 match moved_processor.process(message.clone()).await {
                     Ok(reply) => {
                         debug!("Successfully processed message");
@@ -133,27 +140,26 @@ impl NatsClient {
         &self,
         reply: ReplyMessage,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        debug!(
-            "Sending reply to subject: {}, reply: {}",
-            reply.subject, reply.reply
-        );
+        debug!("Sending reply to:  {}", reply.reply);
+        trace!("Reply payload size: {}", reply.payload.len());
         self.client
-            .publish_with_reply(reply.subject.clone(), reply.reply.clone(), reply.payload)
+            .publish(reply.reply.clone(), reply.payload.clone())
             .await
             .map_err(|e| {
-                error!("Failed to reply to {}: {}", reply.subject, e);
+                error!("Failed to reply to {}: {}", reply.reply, e);
                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
             })?;
-        debug!("Successfully sent reply to {}", reply.subject);
+        debug!("Successfully sent reply to {}", reply.reply);
         Ok(())
     }
+
     async fn reply_err(
         &self,
         err: ReplyErrorMessage,
         msg_source: Message,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        trace!("Creating error reply message");
         let reply = ReplyMessage {
-            subject: msg_source.subject.to_string(),
             reply: msg_source
                 .reply
                 .clone()
@@ -203,6 +209,7 @@ impl<R: RequestProcessor> MutlipleHandle<NatsClient, R> {
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         for sub in &self.subs {
             let mut sub = sub.lock().await;
+            trace!("Unsubscribing from subject");
             sub.unsubscribe().await?;
         }
         Ok(())
@@ -213,6 +220,7 @@ impl<R: RequestProcessor> Handle<NatsClient, R> {
     #[instrument]
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut sub = self.sub.lock().await;
+        trace!("Unsubscribing from subject");
         sub.unsubscribe().await?;
         Ok(())
     }
@@ -228,7 +236,6 @@ pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug {
 
 #[derive(Clone, Debug)]
 pub struct ReplyMessage {
-    pub subject: String,
     pub reply: String,
     pub payload: Bytes,
 }
@@ -238,7 +245,6 @@ pub struct ReplyErrorMessage(pub Box<dyn std::error::Error + Send + Sync>);
 pub fn reply(msg: &Message, payload: Bytes) -> ReplyMessage {
     println!("Replying to message: {:?}", msg);
     ReplyMessage {
-        subject: msg.subject.clone().to_string(),
         reply: msg.reply.clone().unwrap_or_else(|| "".into()).to_string(),
         payload,
     }
