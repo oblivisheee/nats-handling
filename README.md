@@ -18,7 +18,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-async-nats-easy = "0.1.0"
+async-nats-easy = "0.1.5"
 ```
 
 ## Usage
@@ -53,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use async_nats_easy::NatsClient;
+use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -80,7 +81,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-
 ### Handling
 
 To handle messages from a subject, you need to implement the `RequestProcessor` trait and use the `handle` method of `NatsClient`.
@@ -94,9 +94,9 @@ struct MyProcessor;
 
 #[async_trait]
 impl RequestProcessor for MyProcessor {
-    async fn process(&self, message: Message) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn process(&self, message: Message) -> Result<ReplyMessage, Box<dyn std::error::Error + Send + Sync>> {
         println!("Processing message: {:?}", message);
-        Ok(())
+        Ok(reply(&message, Bytes::from("Response")))
     }
 }
 
@@ -124,9 +124,9 @@ struct MyProcessor;
 
 #[async_trait]
 impl RequestProcessor for MyProcessor {
-    async fn process(&self, message: Message) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn process(&self, message: Message) -> Result<ReplyMessage, Box<dyn std::error::Error + Send + Sync>> {
         println!("Processing message: {:?}", message);
-        Ok(())
+        Ok(reply(&message, Bytes::from("Response")))
     }
 }
 
@@ -138,6 +138,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Plan
+- [x] Nats Client implementation
+- [x] Trait for processing messages
+- [x] Add support for handling NATS subjects
+- [ ] Add support for NATS headers
+- [ ] Integrate JetStream
+
+
 ## License
 
 This project is licensed under the MIT License.
+
