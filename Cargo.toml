@@ -1,12 +1,12 @@
 [package]
-name = "async-nats-easy"
-version = "0.5.0"
+name = "nats-handling"
+version = "0.1.0"
 edition = "2021"
-authors = ["Oleg Pogoraev <merizo.labs@gmail.com>"]
+authors = ["Oleg Pogoraev <contact@oblivisheee.me"]
 description = "An easy-to-use async NATS client library"
 license = "MIT"
-repository = "https://github.com/oblivisheee/async-nats-easy"
-documentation = "https://docs.rs/async-nats-easy"
+repository = "https://github.com/oblivisheee/nats-handling"
+documentation = "https://docs.rs/nats-handling"
 keywords = ["async", "nats", "client", "library"]
 categories = ["network-programming", "asynchronous"]
 

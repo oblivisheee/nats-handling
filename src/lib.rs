@@ -1,3 +1,5 @@
+/// Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
+/// The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
 pub use async_nats::Error as NatsError;
 pub use async_nats::Message;
 
@@ -9,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument, trace};
 
+/// A structure that handles specified NATS subject and responds to messages
 #[derive(Debug)]
 pub struct Handle<T, R> {
     client: T,
@@ -16,12 +19,14 @@ pub struct Handle<T, R> {
     request_processor: R,
 }
 
+/// A structure that represents a connection to a NATS server
 #[derive(Clone, Debug)]
 pub struct NatsClient {
     client: Client,
 }
 
 impl NatsClient {
+    /// Creates a new NATS client and connects to the specified server
     #[instrument]
     pub async fn new(bind: &[&str]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         info!("Connecting to NATS server at {:?}", bind);
@@ -33,7 +38,7 @@ impl NatsClient {
         info!("Successfully connected to NATS server");
         Ok(Self { client })
     }
-
+    /// Subscribes to a specified NATS subject
     #[instrument]
     pub async fn subscribe(
         &self,
@@ -48,7 +53,7 @@ impl NatsClient {
         debug!("Successfully subscribed to {}", subject);
         Ok(subscription)
     }
-
+    /// Publishes a message to a specified NATS subject
     #[instrument]
     pub async fn publish(
         &self,
@@ -67,7 +72,7 @@ impl NatsClient {
         debug!("Successfully published to {}", subject);
         Ok(())
     }
-
+    /// Sends a request to a specified NATS subject and returns the response
     #[instrument]
     pub async fn request(
         &self,
@@ -88,7 +93,7 @@ impl NatsClient {
         trace!("Response payload size: {}", response.payload.len());
         Ok(response)
     }
-
+    /// Handles a specified NATS subject and processes messages using the provided processor
     #[instrument(skip(processor))]
     pub async fn handle<R: RequestProcessor + 'static>(
         &self,
@@ -134,7 +139,7 @@ impl NatsClient {
             request_processor: processor,
         })
     }
-
+    /// Sends a reply to a message
     #[instrument]
     pub async fn reply(
         &self,
@@ -152,7 +157,7 @@ impl NatsClient {
         debug!("Successfully sent reply to {}", reply.reply);
         Ok(())
     }
-
+    /// Sends an error reply to a message
     async fn reply_err(
         &self,
         err: ReplyErrorMessage,
@@ -172,7 +177,7 @@ impl NatsClient {
         };
         self.reply(reply).await
     }
-
+    /// Handles multiple NATS subjects and processes messages using the provided processor
     #[instrument(skip(processor))]
     pub async fn handle_multiple<R: RequestProcessor + 'static>(
         &self,
@@ -197,6 +202,7 @@ impl NatsClient {
     }
 }
 
+/// A structure that handles multiple NATS subject and responds to messages
 #[derive(Debug)]
 pub struct MutlipleHandle<T, R> {
     client: T,
@@ -205,6 +211,7 @@ pub struct MutlipleHandle<T, R> {
 }
 
 impl<R: RequestProcessor> MutlipleHandle<NatsClient, R> {
+    /// Closes all subscriptions
     #[instrument]
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         for sub in &self.subs {
@@ -217,6 +224,7 @@ impl<R: RequestProcessor> MutlipleHandle<NatsClient, R> {
 }
 
 impl<R: RequestProcessor> Handle<NatsClient, R> {
+    /// Closes the subscription
     #[instrument]
     pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut sub = self.sub.lock().await;
@@ -226,6 +234,7 @@ impl<R: RequestProcessor> Handle<NatsClient, R> {
     }
 }
 
+/// A trait that defines a request processor for NATS messages
 #[async_trait]
 pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug {
     async fn process(
@@ -234,16 +243,17 @@ pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug {
     ) -> Result<ReplyMessage, Box<dyn std::error::Error + Send + Sync>>;
 }
 
+/// A structure that represents a reply message
 #[derive(Clone, Debug)]
 pub struct ReplyMessage {
     pub reply: String,
     pub payload: Bytes,
 }
-
+/// A structure that represents an error reply message
 pub struct ReplyErrorMessage(pub Box<dyn std::error::Error + Send + Sync>);
 
+/// An easy-to-use function that creates a reply message
 pub fn reply(msg: &Message, payload: Bytes) -> ReplyMessage {
-    println!("Replying to message: {:?}", msg);
     ReplyMessage {
         reply: msg.reply.clone().unwrap_or_else(|| "".into()).to_string(),
         payload,
