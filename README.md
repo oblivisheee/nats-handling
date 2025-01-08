@@ -14,11 +14,10 @@
 
 ## Installation
 
-Add the following to your `Cargo.toml`:
+Use following command in your project:
 
-```toml
-[dependencies]
-nats-handling = "0.1.0"
+```console
+cargo add nats-handling
 ```
 
 ## Usage

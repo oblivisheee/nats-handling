@@ -1,8 +1,8 @@
-/// Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
-/// The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
+//! Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
+//! The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
+
 pub use async_nats::Error as NatsError;
 pub use async_nats::Message;
-
 use async_nats::{Client, ConnectOptions, Subscriber};
 pub use async_trait::async_trait;
 use bytes::Bytes;
