@@ -1,5 +1,9 @@
 # nats-handling
 
+[![License](https://badgen.net/github/license/oblivisheee/nats-handling)](https://github.com/oblivisheee/nats-handling/blob/main/LICENSE)
+[![Crates.io](https://badgen.net/crates/v/nats-handling)](https://crates.io/crates/nats-handling)
+![Downloads](https://badgen.net/crates/d/nats-handling)
+
 ## Overview
 
 `nats-handling` is a Rust library that provides an easy-to-use interface for interacting with NATS, an open-source messaging system. This library leverages asynchronous programming to handle NATS operations efficiently.
