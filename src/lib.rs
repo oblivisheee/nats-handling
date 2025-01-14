@@ -1,11 +1,13 @@
 //! Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
 //! The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
+pub mod error;
 
 pub use async_nats::Error as NatsError;
 pub use async_nats::Message;
 use async_nats::{Client, ConnectOptions, Subscriber};
 pub use async_trait::async_trait;
 use bytes::Bytes;
+pub use error::Error;
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -28,7 +30,7 @@ pub struct NatsClient {
 impl NatsClient {
     /// Creates a new NATS client and connects to the specified server
     #[instrument]
-    pub async fn new(bind: &[&str]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn new(bind: &[&str]) -> Result<Self, Error> {
         info!("Connecting to NATS server at {:?}", bind);
         trace!("Creating ConnectOptions");
         let client = ConnectOptions::new().connect(bind).await.map_err(|e| {
@@ -40,10 +42,7 @@ impl NatsClient {
     }
     /// Subscribes to a specified NATS subject
     #[instrument]
-    pub async fn subscribe(
-        &self,
-        subject: String,
-    ) -> Result<Subscriber, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn subscribe(&self, subject: String) -> Result<Subscriber, Error> {
         info!("Subscribing to subject: {}", subject);
         trace!("Calling client.subscribe with subject: {}", subject);
         let subscription = self.client.subscribe(subject.clone()).await.map_err(|e| {
@@ -55,11 +54,7 @@ impl NatsClient {
     }
     /// Publishes a message to a specified NATS subject
     #[instrument]
-    pub async fn publish(
-        &self,
-        subject: String,
-        payload: Bytes,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn publish(&self, subject: String, payload: Bytes) -> Result<(), Error> {
         debug!("Publishing message to subject: {}", subject);
         trace!("Payload size: {}", payload.len());
         self.client
@@ -74,11 +69,7 @@ impl NatsClient {
     }
     /// Sends a request to a specified NATS subject and returns the response
     #[instrument]
-    pub async fn request(
-        &self,
-        subject: String,
-        payload: Bytes,
-    ) -> Result<Message, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn request(&self, subject: String, payload: Bytes) -> Result<Message, Error> {
         debug!("Sending request to subject: {}", subject);
         trace!("Payload size: {}", payload.len());
         let response = self
@@ -99,7 +90,7 @@ impl NatsClient {
         &self,
         subject: &str,
         processor: R,
-    ) -> Result<Handle<NatsClient, R>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Handle<NatsClient, R>, Error> {
         info!("Setting up handler for subject: {}", subject);
         let subject = subject.to_string();
         let subscriber = Arc::new(Mutex::new(self.subscribe(subject.clone()).await?));
@@ -141,10 +132,7 @@ impl NatsClient {
     }
     /// Sends a reply to a message
     #[instrument]
-    pub async fn reply(
-        &self,
-        reply: ReplyMessage,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn reply(&self, reply: ReplyMessage) -> Result<(), Error> {
         debug!("Sending reply to:  {}", reply.reply);
         trace!("Reply payload size: {}", reply.payload.len());
         self.client
@@ -158,11 +146,7 @@ impl NatsClient {
         Ok(())
     }
     /// Sends an error reply to a message
-    async fn reply_err(
-        &self,
-        err: ReplyErrorMessage,
-        msg_source: Message,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn reply_err(&self, err: ReplyErrorMessage, msg_source: Message) -> Result<(), Error> {
         trace!("Creating error reply message");
         let reply = ReplyMessage {
             reply: msg_source
@@ -183,7 +167,7 @@ impl NatsClient {
         &self,
         subjects: Vec<&str>,
         processor: R,
-    ) -> Result<MutlipleHandle<NatsClient, R>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<MutlipleHandle<NatsClient, R>, Error> {
         info!("Setting up multiple handlers for subjects: {:?}", subjects);
         let mut subs = Vec::new();
         for subject in subjects.iter() {
@@ -213,7 +197,7 @@ pub struct MutlipleHandle<T, R> {
 impl<R: RequestProcessor> MutlipleHandle<NatsClient, R> {
     /// Closes all subscriptions
     #[instrument]
-    pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn close(&self) -> Result<(), Error> {
         for sub in &self.subs {
             let mut sub = sub.lock().await;
             trace!("Unsubscribing from subject");
@@ -226,7 +210,7 @@ impl<R: RequestProcessor> MutlipleHandle<NatsClient, R> {
 impl<R: RequestProcessor> Handle<NatsClient, R> {
     /// Closes the subscription
     #[instrument]
-    pub async fn close(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn close(&self) -> Result<(), Error> {
         let mut sub = self.sub.lock().await;
         trace!("Unsubscribing from subject");
         sub.unsubscribe().await?;
@@ -237,10 +221,7 @@ impl<R: RequestProcessor> Handle<NatsClient, R> {
 /// A trait that defines a request processor for NATS messages
 #[async_trait]
 pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug {
-    async fn process(
-        &self,
-        message: Message,
-    ) -> Result<ReplyMessage, Box<dyn std::error::Error + Send + Sync>>;
+    async fn process(&self, message: Message) -> Result<ReplyMessage, Error>;
 }
 
 /// A structure that represents a reply message
@@ -250,7 +231,7 @@ pub struct ReplyMessage {
     pub payload: Bytes,
 }
 /// A structure that represents an error reply message
-pub struct ReplyErrorMessage(pub Box<dyn std::error::Error + Send + Sync>);
+pub struct ReplyErrorMessage(pub Error);
 
 /// An easy-to-use function that creates a reply message
 pub fn reply(msg: &Message, payload: Bytes) -> ReplyMessage {
