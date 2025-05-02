@@ -2,7 +2,6 @@
 //! The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
 pub mod error;
 
-pub use async_nats::Error as NatsError;
 pub use async_nats::Message;
 use async_nats::{Client, ConnectOptions, Subscriber};
 pub use async_trait::async_trait;
@@ -15,10 +14,8 @@ use tracing::{debug, error, info, instrument, trace};
 
 /// A structure that handles specified NATS subject and responds to messages
 #[derive(Debug)]
-pub struct Handle<T, R> {
-    client: T,
+pub struct Handle {
     sub: Arc<Mutex<Subscriber>>,
-    request_processor: R,
 }
 
 /// A structure that represents a connection to a NATS server
@@ -90,7 +87,7 @@ impl NatsClient {
         &self,
         subject: &str,
         processor: R,
-    ) -> Result<Handle<NatsClient, R>, Error> {
+    ) -> Result<Handle, Error> {
         info!("Setting up handler for subject: {}", subject);
         let subject = subject.to_string();
         let subscriber = Arc::new(Mutex::new(self.subscribe(subject.clone()).await?));
@@ -124,11 +121,7 @@ impl NatsClient {
             }
         });
 
-        Ok(Handle {
-            client: self.clone(),
-            sub: subscriber,
-            request_processor: processor,
-        })
+        Ok(Handle { sub: subscriber })
     }
     /// Sends a reply to a message
     #[instrument]
@@ -167,7 +160,7 @@ impl NatsClient {
         &self,
         subjects: Vec<&str>,
         processor: R,
-    ) -> Result<MutlipleHandle<NatsClient, R>, Error> {
+    ) -> Result<MutlipleHandle, Error> {
         info!("Setting up multiple handlers for subjects: {:?}", subjects);
         let mut subs = Vec::new();
         for subject in subjects.iter() {
@@ -178,23 +171,17 @@ impl NatsClient {
             self.handle(&subject, processor.clone()).await?;
             subs.push(subscriber);
         }
-        Ok(MutlipleHandle {
-            client: self.clone(),
-            subs,
-            request_processor: processor,
-        })
+        Ok(MutlipleHandle { subs })
     }
 }
 
 /// A structure that handles multiple NATS subject and responds to messages
 #[derive(Debug)]
-pub struct MutlipleHandle<T, R> {
-    client: T,
+pub struct MutlipleHandle {
     subs: Vec<Arc<Mutex<Subscriber>>>,
-    request_processor: R,
 }
 
-impl<R: RequestProcessor> MutlipleHandle<NatsClient, R> {
+impl MutlipleHandle {
     /// Closes all subscriptions
     #[instrument]
     pub async fn close(&self) -> Result<(), Error> {
@@ -207,7 +194,7 @@ impl<R: RequestProcessor> MutlipleHandle<NatsClient, R> {
     }
 }
 
-impl<R: RequestProcessor> Handle<NatsClient, R> {
+impl Handle {
     /// Closes the subscription
     #[instrument]
     pub async fn close(&self) -> Result<(), Error> {
