@@ -1,0 +1,11 @@
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.88"
+nats-handling = { path = "../" }
+tokio = { version = "1.44.2", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
