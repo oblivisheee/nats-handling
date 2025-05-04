@@ -1,13 +1,16 @@
 //! Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
 //! The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
 pub mod error;
-
-pub use async_nats::Message;
-use async_nats::{Client, ConnectOptions, Subscriber};
+// #[cfg(feature = "jetstream")]
+// pub mod jetstream;
+pub use async_nats::ConnectOptions;
+pub use async_nats::Request;
+use async_nats::{Client, HeaderMap, Subscriber};
 use async_trait::async_trait;
 use bytes::Bytes;
 pub use error::Error;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, trace};
 
@@ -15,9 +18,14 @@ use tracing::{debug, error, info, instrument, trace};
 #[derive(Debug)]
 pub struct Handle {
     cancel: CancellationToken,
-    handle: tokio::task::JoinHandle<()>,
+    handle: Option<tokio::task::JoinHandle<()>>,
 }
 
+impl Drop for Handle {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
 /// A structure that represents a connection to a NATS server
 #[derive(Clone, Debug)]
 pub struct NatsClient {
@@ -29,8 +37,16 @@ impl NatsClient {
     #[instrument(skip_all)]
     pub async fn new(bind: &[&str]) -> Result<Self, Error> {
         info!("Connecting to NATS server at {:?}", bind);
-        trace!("Creating ConnectOptions");
         let client = ConnectOptions::new().connect(bind).await?;
+        info!("Successfully connected to NATS server");
+        Ok(Self { client })
+    }
+    #[instrument(skip_all)]
+    pub async fn with_options(bind: &[&str], options: ConnectOptions) -> Result<Self, Error> {
+        info!("Connecting to NATS server at {:?}", bind);
+
+        let client = options.connect(bind).await?;
+
         info!("Successfully connected to NATS server");
         Ok(Self { client })
     }
@@ -40,7 +56,7 @@ impl NatsClient {
         let subject = subject.as_ref().to_owned();
         info!("Subscribing to subject: {}", subject);
         trace!("Calling client.subscribe with subject: {}", subject);
-        let subscription = self.client.subscribe(subject.clone()).await?;
+        let subscription = self.client.subscribe(subject.to_owned()).await?;
         debug!("Successfully subscribed to {}", subject);
         Ok(subscription)
     }
@@ -50,7 +66,7 @@ impl NatsClient {
         let subject = subject.as_ref().to_owned();
         debug!("Publishing message to subject: {}", subject);
         trace!("Payload size: {}", payload.len());
-        self.client.publish(subject.clone(), payload).await?;
+        self.client.publish(subject.to_owned(), payload).await?;
         debug!("Successfully published to {}", subject);
         Ok(())
     }
@@ -64,11 +80,45 @@ impl NatsClient {
         let subject = subject.as_ref().to_owned();
         debug!("Sending request to subject: {}", subject);
         trace!("Payload size: {}", payload.len());
-        let response = self.client.request(subject.clone(), payload).await?;
+        let response = self.client.request(subject.to_owned(), payload).await?;
         debug!("Received response from {}", subject);
         trace!("Response payload size: {}", response.payload.len());
-        Ok(response)
+        Ok(Message(response))
     }
+    /// Sends a request with headers to a specified NATS subject and returns the response
+    #[instrument(skip_all)]
+    pub async fn request_with_headers(
+        &self,
+        subject: impl AsRef<str>,
+        payload: Bytes,
+        headers: HeaderMap,
+    ) -> Result<Message, Error> {
+        let subject = subject.as_ref().to_owned();
+        debug!("Sending request to subject: {}", subject);
+        trace!("Payload size: {}", payload.len());
+        let response = self
+            .client
+            .request_with_headers(subject.clone(), headers, payload)
+            .await?;
+        debug!("Received response from {}", subject);
+        trace!("Response payload size: {}", response.payload.len());
+        Ok(Message(response))
+    }
+    /// Sends a custom request structure to a specified NATS subject and returns the response
+    #[instrument(skip_all)]
+    pub async fn send_request(
+        &self,
+        subject: impl AsRef<str>,
+        req: Request,
+    ) -> Result<Message, Error> {
+        let subject = subject.as_ref().to_owned();
+        debug!("Sending request to subject: {}", subject);
+
+        let response = self.client.send_request(subject.clone(), req).await?;
+        debug!("Received response from {}", subject);
+        Ok(Message(response))
+    }
+
     /// Handles a specified NATS subject and processes messages using the provided processor
     #[instrument(skip_all)]
     pub async fn handle<R: RequestProcessor + 'static>(
@@ -95,7 +145,7 @@ impl NatsClient {
                 while let Some(message) = subscriber.next().await {
                 debug!("Processing message from subject: {}", message.subject);
                 trace!("Message payload size: {}", message.payload.len());
-                match moved_processor.process(message.clone()).await {
+                match moved_processor.process(Message(message.clone())).await {
                     Ok(reply) => {
                     debug!("Successfully processed message");
                     if let Err(e) = client_clone.reply(reply).await {
@@ -105,7 +155,7 @@ impl NatsClient {
                     Err(e) => {
                     error!("Failed to process message: {}", e);
                     if let Err(e) = client_clone
-                        .reply_err(ReplyErrorMessage(e), message.clone())
+                        .reply_err(ReplyErrorMessage(Box::new(e)), Message(message.clone()))
                         .await
                     {
                         error!("Failed to reply to message: {}", e);
@@ -126,25 +176,53 @@ impl NatsClient {
 
         Ok(Handle {
             cancel: cancel_token,
-            handle,
+            handle: Some(handle),
         })
     }
+
     /// Sends a reply to a message
     #[instrument(skip_all)]
     pub async fn reply(&self, reply: ReplyMessage) -> Result<(), Error> {
-        debug!("Sending reply to:  {}", reply.reply);
+        debug!("Sending reply to: {}", reply.subject);
         trace!("Reply payload size: {}", reply.payload.len());
-        self.client
-            .publish(reply.reply.clone(), reply.payload.clone())
-            .await?;
-        debug!("Successfully sent reply to {}", reply.reply);
+
+        match (reply.headers, reply.reply) {
+            (Some(headers), Some(reply_subject)) => {
+                self.client
+                    .publish_with_reply_and_headers(
+                        reply.subject.clone(),
+                        reply_subject,
+                        headers,
+                        reply.payload.clone(),
+                    )
+                    .await?;
+            }
+            (Some(headers), None) => {
+                self.client
+                    .publish_with_headers(reply.subject.clone(), headers, reply.payload.clone())
+                    .await?;
+            }
+            (None, Some(reply_subject)) => {
+                self.client
+                    .publish_with_reply(reply.subject.clone(), reply_subject, reply.payload.clone())
+                    .await?;
+            }
+            (None, None) => {
+                self.client
+                    .publish(reply.subject.clone(), reply.payload.clone())
+                    .await?;
+            }
+        }
+
+        debug!("Successfully sent reply to {}", reply.subject);
         Ok(())
     }
     /// Sends an error reply to a message
+    #[instrument(skip_all)]
     async fn reply_err(&self, err: ReplyErrorMessage, msg_source: Message) -> Result<(), Error> {
         trace!("Creating error reply message");
         let reply = ReplyMessage {
-            reply: msg_source
+            subject: msg_source
                 .reply
                 .clone()
                 .unwrap_or_else(|| {
@@ -153,6 +231,8 @@ impl NatsClient {
                 })
                 .to_string(),
             payload: err.0.to_string().into(),
+            headers: None,
+            reply: None,
         };
         self.reply(reply).await
     }
@@ -175,6 +255,80 @@ impl NatsClient {
         }
         Ok(MultipleHandle { handles })
     }
+    /// Returns the default timeout for requests set when creating the client.
+    pub fn timeout(&self) -> Option<tokio::time::Duration> {
+        self.client.timeout()
+    }
+
+    /// Returns last received info from the server.
+    pub fn server_info(&self) -> async_nats::ServerInfo {
+        self.client.server_info()
+    }
+
+    /// Returns true if the server version is compatible with the version components.
+    pub fn is_server_compatible(&self, major: i64, minor: i64, patch: i64) -> bool {
+        self.client.is_server_compatible(major, minor, patch)
+    }
+
+    /// Flushes the internal buffer ensuring that all messages are sent.
+    pub async fn flush(&self) -> Result<(), Error> {
+        Ok(self.client.flush().await?)
+    }
+
+    /// Drains all subscriptions, stops any new messages from being published, and flushes any remaining messages, then closes the connection.
+    pub async fn drain(&self) -> Result<(), Error> {
+        self.client.drain().await.map_err(Into::into)
+    }
+
+    /// Returns the current state of the connection.
+    pub fn connection_state(&self) -> async_nats::connection::State {
+        self.client.connection_state()
+    }
+
+    /// Forces the client to reconnect.
+    pub async fn force_reconnect(&self) -> Result<(), Error> {
+        self.client.force_reconnect().await.map_err(Into::into)
+    }
+
+    /// Subscribes to a subject with a queue group to receive messages.
+    #[instrument(skip_all)]
+    pub async fn queue_subscribe(
+        &self,
+        subject: impl AsRef<str>,
+        queue_group: impl AsRef<str>,
+    ) -> Result<Subscriber, Error> {
+        let subject = subject.as_ref().to_owned();
+        let queue_group = queue_group.as_ref().to_owned();
+        info!(
+            "Subscribing to subject: {} with queue group: {}",
+            subject, queue_group
+        );
+
+        trace!(
+            "Calling client.queue_subscribe with subject: {} and queue group: {}",
+            subject,
+            queue_group
+        );
+        let subscription = self
+            .client
+            .queue_subscribe(subject.clone(), queue_group.clone())
+            .await?;
+        debug!(
+            "Successfully subscribed to {} with queue group: {}",
+            subject, queue_group
+        );
+
+        Ok(subscription)
+    }
+    /// Returns statistics for the instance of the client throughout its lifecycle.
+    pub fn statistics(&self) -> std::sync::Arc<async_nats::Statistics> {
+        self.client.statistics()
+    }
+
+    /// Creates a new globally unique inbox which can be used for replies.
+    pub fn new_inbox(&self) -> String {
+        self.client.new_inbox()
+    }
 }
 
 /// A structure that handles multiple NATS subject and responds to messages
@@ -192,8 +346,8 @@ impl MultipleHandle {
         }
         Ok(())
     }
-    pub async fn abort(&self) {
-        for handle in self.handles.iter() {
+    pub async fn abort(&mut self) {
+        for handle in self.handles.iter_mut() {
             handle.abort().await;
         }
     }
@@ -202,39 +356,96 @@ impl MultipleHandle {
 impl Handle {
     /// Gracefully shuts down the subscription
     #[instrument(skip_all)]
-    pub async fn shutdown(self) {
+    pub async fn shutdown(mut self) {
         info!("Initiating shutdown for handle");
         self.cancel.cancel();
-        if let Err(e) = self.handle.await {
-            error!("handler join error: {:?}", e);
+        if let Some(handle) = self.handle.take() {
+            if let Err(e) = handle.await {
+                error!("handle join error: {:?}", e);
+            }
         }
     }
-    pub async fn abort(&self) {
+    pub async fn abort(&mut self) {
         info!("Aborting handle");
         self.cancel.cancel();
-        self.handle.abort();
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Message(async_nats::Message);
+
+impl std::ops::Deref for Message {
+    type Target = async_nats::Message;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Message {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Message {
+    pub fn reply(&self, payload: Bytes) -> ReplyMessage {
+        ReplyMessage {
+            subject: self.reply.clone().unwrap_or_else(|| "".into()).to_string(),
+            payload,
+            headers: None,
+            reply: None,
+        }
     }
 }
 
 /// A trait that defines a request processor for NATS messages
 #[async_trait]
-pub trait RequestProcessor: Send + Sync + Clone + std::fmt::Debug {
-    async fn process(&self, message: Message) -> Result<ReplyMessage, Error>;
+pub trait RequestProcessor: Send + Sync + Clone {
+    type Error: std::error::Error + Send + Sync + 'static;
+    async fn process(&self, message: Message) -> Result<ReplyMessage, Self::Error>;
 }
 
 /// A structure that represents a reply message
 #[derive(Clone, Debug)]
 pub struct ReplyMessage {
-    pub reply: String,
+    pub reply: Option<String>,
+    pub subject: String,
     pub payload: Bytes,
+    pub headers: Option<HeaderMap>,
 }
+impl ReplyMessage {
+    pub fn new(subject: String, payload: Bytes) -> Self {
+        Self {
+            reply: None,
+            subject,
+            payload,
+            headers: None,
+        }
+    }
+}
+//TODO: Fix sending custom PublishMessage natively via method
+// impl Into<async_nats::PublishMessage> for ReplyMessage {
+//     fn into(self) -> async_nats::PublishMessage {
+//         async_nats::PublishMessage {
+//             subject: self.subject.into(),
+//             payload: self.payload,
+//             reply: self.reply.map(|s| s.into()),
+//             headers: self.headers,
+//         }
+//     }
+// }
+
 /// A structure that represents an error reply message
-pub struct ReplyErrorMessage(pub Error);
+struct ReplyErrorMessage(pub Box<dyn std::error::Error + Send + Sync>);
 
 /// An easy-to-use function that creates a reply message
 pub fn reply(msg: &Message, payload: Bytes) -> ReplyMessage {
     ReplyMessage {
-        reply: msg.reply.clone().unwrap_or_else(|| "".into()).to_string(),
+        subject: msg.reply.clone().unwrap_or_else(|| "".into()).to_string(),
         payload,
+        headers: None,
+        reply: None,
     }
 }

@@ -14,4 +14,10 @@ pub enum Error {
     RequestError(#[from] async_nats::RequestError),
     #[error("Publish error: {0}")]
     PublishError(#[from] async_nats::PublishError),
+    #[error("Flush error: {0}")]
+    FlushError(#[from] async_nats::client::FlushError),
+    #[error("Drain error: {0}")]
+    DrainError(#[from] async_nats::client::DrainError),
+    #[error("Reconnect error: {0}")]
+    ReconnectError(#[from] async_nats::client::ReconnectError),
 }
