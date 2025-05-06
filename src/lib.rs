@@ -42,6 +42,14 @@ impl NatsClient {
         Ok(Self { client })
     }
     #[instrument(skip_all)]
+    /// Creates JetStream context from the NATS client
+    #[cfg(feature = "jetstream")]
+    pub fn jetstream(&self) -> jetstream::JetStream {
+        jetstream::JetStream::new(self.clone())
+    }
+
+    /// Creates a new NATS client with specified options and connects to the server
+    #[instrument(skip_all)]
     pub async fn with_options(bind: &[&str], options: ConnectOptions) -> Result<Self, Error> {
         info!("Connecting to NATS server at {:?}", bind);
 
@@ -121,7 +129,7 @@ impl NatsClient {
 
     /// Handles a specified NATS subject and processes messages using the provided processor
     #[instrument(skip_all)]
-    pub async fn handle<R: RequestProcessor + 'static>(
+    pub async fn handle<R: MessageProcessor + 'static>(
         &self,
         subject: impl AsRef<str>,
         processor: R,
@@ -148,9 +156,15 @@ impl NatsClient {
                 match moved_processor.process(Message(message.clone())).await {
                     Ok(reply) => {
                     debug!("Successfully processed message");
-                    if let Err(e) = client_clone.reply(reply).await {
-                        error!("Failed to reply to message: {}", e);
+                    if let Some(reply) = reply {
+                        debug!("Sending reply: {:?}", reply);
+                        if let Err(e) = client_clone.reply(reply).await {
+                            error!("Failed to reply to message: {}", e);
+                        }
+                    } else {
+                        debug!("No reply needed");
                     }
+
                     }
                     Err(e) => {
                     error!("Failed to process message: {}", e);
@@ -238,7 +252,7 @@ impl NatsClient {
     }
     /// Handles multiple NATS subjects and processes messages using the provided processor
     #[instrument(skip_all)]
-    pub async fn handle_multiple<R: RequestProcessor + 'static>(
+    pub async fn handle_multiple<R: MessageProcessor + 'static>(
         &self,
         subjects: impl IntoIterator<Item = String>,
         processor: R,
@@ -406,11 +420,14 @@ impl Message {
     }
 }
 
+#[deprecated(note = "Please use MessageProcessor instead")]
+pub type RequestProcessor = dyn MessageProcessor;
+
 /// A trait that defines a request processor for NATS messages
 #[async_trait]
-pub trait RequestProcessor: Send + Sync + Clone {
+pub trait MessageProcessor: Send + Sync + Clone {
     type Error: std::error::Error + Send + Sync + 'static;
-    async fn process(&self, message: Message) -> Result<ReplyMessage, Self::Error>;
+    async fn process(&self, message: Message) -> Result<Option<ReplyMessage>, Self::Error>;
 }
 
 /// A structure that represents a reply message
