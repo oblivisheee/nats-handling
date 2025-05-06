@@ -1,8 +1,8 @@
 //! Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
 //! The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
 pub mod error;
-// #[cfg(feature = "jetstream")]
-// pub mod jetstream;
+#[cfg(feature = "jetstream")]
+pub mod jetstream;
 pub use async_nats::ConnectOptions;
 pub use async_nats::Request;
 use async_nats::{Client, HeaderMap, Subscriber};
@@ -237,55 +237,59 @@ impl NatsClient {
         self.reply(reply).await
     }
     /// Handles multiple NATS subjects and processes messages using the provided processor
-    #[instrument(skip(processor))]
+    #[instrument(skip_all)]
     pub async fn handle_multiple<R: RequestProcessor + 'static>(
         &self,
-        subjects: Vec<&str>,
+        subjects: impl IntoIterator<Item = String>,
         processor: R,
     ) -> Result<MultipleHandle, Error> {
-        info!("Setting up multiple handlers for subjects: {:?}", subjects);
-        let mut handles = Vec::new();
-        for subject in subjects.iter() {
-            debug!("Setting up handler for subject: {}", subject);
+        let handles: Vec<Result<Handle, Error>> = futures::stream::iter(subjects)
+            .then(|subj| self.handle(subj.clone(), processor.clone()))
+            .collect::<Vec<_>>()
+            .await;
 
-            let subject = subject.to_owned();
+        let handles: Vec<Handle> = handles.into_iter().collect::<Result<_, _>>()?;
 
-            let handle = self.handle(&subject, processor.clone()).await?;
-            handles.push(handle);
-        }
         Ok(MultipleHandle { handles })
     }
     /// Returns the default timeout for requests set when creating the client.
+    #[instrument(skip_all)]
     pub fn timeout(&self) -> Option<tokio::time::Duration> {
         self.client.timeout()
     }
 
     /// Returns last received info from the server.
+    #[instrument(skip_all)]
     pub fn server_info(&self) -> async_nats::ServerInfo {
         self.client.server_info()
     }
 
     /// Returns true if the server version is compatible with the version components.
+    #[instrument(skip_all)]
     pub fn is_server_compatible(&self, major: i64, minor: i64, patch: i64) -> bool {
         self.client.is_server_compatible(major, minor, patch)
     }
 
     /// Flushes the internal buffer ensuring that all messages are sent.
+    #[instrument(skip_all)]
     pub async fn flush(&self) -> Result<(), Error> {
         Ok(self.client.flush().await?)
     }
 
     /// Drains all subscriptions, stops any new messages from being published, and flushes any remaining messages, then closes the connection.
+    #[instrument(skip_all)]
     pub async fn drain(&self) -> Result<(), Error> {
         self.client.drain().await.map_err(Into::into)
     }
 
     /// Returns the current state of the connection.
+    #[instrument(skip_all)]
     pub fn connection_state(&self) -> async_nats::connection::State {
         self.client.connection_state()
     }
 
     /// Forces the client to reconnect.
+    #[instrument(skip_all)]
     pub async fn force_reconnect(&self) -> Result<(), Error> {
         self.client.force_reconnect().await.map_err(Into::into)
     }
@@ -321,11 +325,13 @@ impl NatsClient {
         Ok(subscription)
     }
     /// Returns statistics for the instance of the client throughout its lifecycle.
+    #[instrument(skip_all)]
     pub fn statistics(&self) -> std::sync::Arc<async_nats::Statistics> {
         self.client.statistics()
     }
 
     /// Creates a new globally unique inbox which can be used for replies.
+    #[instrument(skip_all)]
     pub fn new_inbox(&self) -> String {
         self.client.new_inbox()
     }

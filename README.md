@@ -156,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - [x] Nats Client implementation
 - [x] Trait for processing messages
 - [x] Add support for handling NATS subjects
-- [ ] Add support for NATS headers
+- [x] Add support for NATS headers
 - [ ] Integrate JetStream
 
 
