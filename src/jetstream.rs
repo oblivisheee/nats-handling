@@ -1,5 +1,5 @@
-mod error;
-mod handle;
+pub mod error;
+pub mod handle;
 
 use crate::NatsClient;
 pub use async_nats::jetstream::Message as JSMessage;
