@@ -1,8 +1,8 @@
 //! Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
 //! The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
 pub mod error;
-// #[cfg(feature = "jetstream")]
-// pub mod jetstream;
+#[cfg(feature = "jetstream")]
+pub mod jetstream;
 pub use async_nats::ConnectOptions;
 pub use async_nats::Request;
 use async_nats::{Client, HeaderMap, Subscriber};
@@ -41,6 +41,14 @@ impl NatsClient {
         info!("Successfully connected to NATS server");
         Ok(Self { client })
     }
+    #[instrument(skip_all)]
+    /// Creates JetStream context from the NATS client
+    #[cfg(feature = "jetstream")]
+    pub fn jetstream(&self) -> jetstream::JetStream {
+        jetstream::JetStream::new(self.clone())
+    }
+
+    /// Creates a new NATS client with specified options and connects to the server
     #[instrument(skip_all)]
     pub async fn with_options(bind: &[&str], options: ConnectOptions) -> Result<Self, Error> {
         info!("Connecting to NATS server at {:?}", bind);
@@ -121,7 +129,7 @@ impl NatsClient {
 
     /// Handles a specified NATS subject and processes messages using the provided processor
     #[instrument(skip_all)]
-    pub async fn handle<R: RequestProcessor + 'static>(
+    pub async fn handle<R: MessageProcessor + 'static>(
         &self,
         subject: impl AsRef<str>,
         processor: R,
@@ -148,9 +156,15 @@ impl NatsClient {
                 match moved_processor.process(Message(message.clone())).await {
                     Ok(reply) => {
                     debug!("Successfully processed message");
-                    if let Err(e) = client_clone.reply(reply).await {
-                        error!("Failed to reply to message: {}", e);
+                    if let Some(reply) = reply {
+                        debug!("Sending reply: {:?}", reply);
+                        if let Err(e) = client_clone.reply(reply).await {
+                            error!("Failed to reply to message: {}", e);
+                        }
+                    } else {
+                        debug!("No reply needed");
                     }
+
                     }
                     Err(e) => {
                     error!("Failed to process message: {}", e);
@@ -237,55 +251,59 @@ impl NatsClient {
         self.reply(reply).await
     }
     /// Handles multiple NATS subjects and processes messages using the provided processor
-    #[instrument(skip(processor))]
-    pub async fn handle_multiple<R: RequestProcessor + 'static>(
+    #[instrument(skip_all)]
+    pub async fn handle_multiple<R: MessageProcessor + 'static>(
         &self,
-        subjects: Vec<&str>,
+        subjects: impl IntoIterator<Item = String>,
         processor: R,
     ) -> Result<MultipleHandle, Error> {
-        info!("Setting up multiple handlers for subjects: {:?}", subjects);
-        let mut handles = Vec::new();
-        for subject in subjects.iter() {
-            debug!("Setting up handler for subject: {}", subject);
+        let handles: Vec<Result<Handle, Error>> = futures::stream::iter(subjects)
+            .then(|subj| self.handle(subj.clone(), processor.clone()))
+            .collect::<Vec<_>>()
+            .await;
 
-            let subject = subject.to_owned();
+        let handles: Vec<Handle> = handles.into_iter().collect::<Result<_, _>>()?;
 
-            let handle = self.handle(&subject, processor.clone()).await?;
-            handles.push(handle);
-        }
         Ok(MultipleHandle { handles })
     }
     /// Returns the default timeout for requests set when creating the client.
+    #[instrument(skip_all)]
     pub fn timeout(&self) -> Option<tokio::time::Duration> {
         self.client.timeout()
     }
 
     /// Returns last received info from the server.
+    #[instrument(skip_all)]
     pub fn server_info(&self) -> async_nats::ServerInfo {
         self.client.server_info()
     }
 
     /// Returns true if the server version is compatible with the version components.
+    #[instrument(skip_all)]
     pub fn is_server_compatible(&self, major: i64, minor: i64, patch: i64) -> bool {
         self.client.is_server_compatible(major, minor, patch)
     }
 
     /// Flushes the internal buffer ensuring that all messages are sent.
+    #[instrument(skip_all)]
     pub async fn flush(&self) -> Result<(), Error> {
         Ok(self.client.flush().await?)
     }
 
     /// Drains all subscriptions, stops any new messages from being published, and flushes any remaining messages, then closes the connection.
+    #[instrument(skip_all)]
     pub async fn drain(&self) -> Result<(), Error> {
         self.client.drain().await.map_err(Into::into)
     }
 
     /// Returns the current state of the connection.
+    #[instrument(skip_all)]
     pub fn connection_state(&self) -> async_nats::connection::State {
         self.client.connection_state()
     }
 
     /// Forces the client to reconnect.
+    #[instrument(skip_all)]
     pub async fn force_reconnect(&self) -> Result<(), Error> {
         self.client.force_reconnect().await.map_err(Into::into)
     }
@@ -321,11 +339,13 @@ impl NatsClient {
         Ok(subscription)
     }
     /// Returns statistics for the instance of the client throughout its lifecycle.
+    #[instrument(skip_all)]
     pub fn statistics(&self) -> std::sync::Arc<async_nats::Statistics> {
         self.client.statistics()
     }
 
     /// Creates a new globally unique inbox which can be used for replies.
+    #[instrument(skip_all)]
     pub fn new_inbox(&self) -> String {
         self.client.new_inbox()
     }
@@ -400,11 +420,14 @@ impl Message {
     }
 }
 
+#[deprecated(note = "Please use MessageProcessor instead")]
+pub type RequestProcessor = dyn MessageProcessor;
+
 /// A trait that defines a request processor for NATS messages
 #[async_trait]
-pub trait RequestProcessor: Send + Sync + Clone {
+pub trait MessageProcessor: Send + Sync + Clone {
     type Error: std::error::Error + Send + Sync + 'static;
-    async fn process(&self, message: Message) -> Result<ReplyMessage, Self::Error>;
+    async fn process(&self, message: Message) -> Result<Option<ReplyMessage>, Self::Error>;
 }
 
 /// A structure that represents a reply message
