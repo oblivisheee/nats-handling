@@ -48,7 +48,7 @@ use bytes::Bytes;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NatsClient::new(&["nats://127.0.0.1:4222"]).await?;
-    client.publish("subject", Bytes::from("Hello, NATS!")).await?;
+    client.publish("subject", "Hello, NATS!").await?;
     Ok(())
 }
 ```
