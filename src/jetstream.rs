@@ -5,6 +5,7 @@ use crate::NatsClient;
 pub use async_nats::jetstream::Message as JSMessage;
 use async_nats::jetstream::{self, Context};
 use async_trait::async_trait;
+pub use handle::Handle;
 
 pub mod config {
     pub use consumer::{PullConsumerConfig, PushConsumerConfig};
@@ -46,7 +47,7 @@ impl JetStream {
     }
 
     /// Handles a delivery using the provided stream configuration and processor
-    pub async fn handle<R: MessageProcessor + Send + 'static>(
+    pub async fn handle<R: MessageProcessor + Send + 'static + Sync>(
         &self,
         delivery: Delivery,
         stream_config: config::StreamConfig,
