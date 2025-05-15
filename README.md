@@ -103,7 +103,7 @@ impl MessageProcessor for MyProcessor {
     async fn process(
         &self,
         message: Message,
-    ) -> Result<Option<ReplyMessage>, Self::Error> {
+    ) -> Result<(), Self::Error> {
         println!("Processing message: {:?}", message);
         Ok(Some(reply(&message, Bytes::from("response"))))
     }
@@ -136,7 +136,7 @@ impl MessageProcessor for MyProcessor {
     async fn process(
         &self,
         message: Message,
-    ) -> Result<Option<ReplyMessage>, Self::Error> {
+    ) -> Result<(), Self::Error> {
         println!("Processing message: {:?}", message);
         Ok(Some(reply(&message, Bytes::from("response"))))
     }
@@ -174,7 +174,7 @@ impl MessageProcessor for MyProcessor {
     async fn process(
         &self,
         message: Message,
-    ) -> Result<Option<ReplyMessage>, Self::Error> {
+    ) -> Result<(), Self::Error> {
         println!("Processing message: {:?}", message);
         Ok(Some(message.reply(Bytes::from("response"))))
     }
@@ -218,7 +218,7 @@ impl MessageProcessor for MyProcessor {
     async fn process(
         &self,
         message: Message,
-    ) -> Result<Option<ReplyMessage>, Self::Error> {
+    ) -> Result<(), Self::Error> {
         println!("Processing message: {:?}", message);
         Ok(Some(message.reply(Bytes::from("response"))))
     }
