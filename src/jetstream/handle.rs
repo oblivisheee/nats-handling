@@ -1,5 +1,8 @@
 use super::JetStreamError;
-use async_nats::jetstream::consumer::{PullConsumer, PushConsumer};
+use async_nats::jetstream::{
+    self,
+    consumer::{PullConsumer, PushConsumer},
+};
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
@@ -34,14 +37,9 @@ impl Handle {
                             Ok(msg) => {
                                 tracing::debug!("Processing message: {:?}", msg);
                                 match processor.process(msg.clone().into()).await {
-                                    Ok(reply) => {
+                                    Ok(_) => {
                                         tracing::debug!("Message processed successfully.");
-                                        if let Some(reply) = reply {
-                                            tracing::debug!("Sending reply: {:?}", reply);
-                                            if let Err(e) = client.reply(reply).await {
-                                                tracing::error!("Error sending reply: {:?}", e);
-                                            }
-                                        }
+
                                         if let Err(e) = msg.ack().await {
                                             tracing::error!("Error acknowledging message: {:?}", e);
                                         } else {
@@ -50,19 +48,11 @@ impl Handle {
                                     }
                                     Err(e) => {
                                         tracing::error!("Error processing message: {:?}", e);
-                                        if let Err(e) = client
-                                            .reply_err(
-                                                crate::ReplyErrorMessage(Box::new(e)),
-                                                msg.clone().into(),
-                                            )
-                                            .await
-                                        {
-                                            tracing::error!("Error sending error reply: {:?}", e);
-                                        }
-                                        if let Err(e) = msg.ack().await {
-                                            tracing::error!("Error acknowledging message: {:?}", e);
+
+                                        if let Err(e) = msg.ack_with(jetstream::AckKind::Nak(None)).await {
+                                            tracing::error!("Error NAK'ing message: {:?}", e);
                                         } else {
-                                            tracing::debug!("Message acknowledged successfully.");
+                                            tracing::debug!("Message NAk'd successfully.");
                                         }
                                     }
                                 }
@@ -118,14 +108,9 @@ impl Handle {
                                         Ok(message) => {
                                             tracing::debug!("Processing message: {:?}", message.message);
                                             match processor.process(message.message.clone().into()).await {
-                                                Ok(reply) => {
+                                                Ok(_) => {
                                                     tracing::debug!("Message processed successfully.");
-                                                    if let Some(reply) = reply {
-                                                        tracing::debug!("Sending reply: {:?}", reply);
-                                                        if let Err(e) = client.reply(reply).await {
-                                                            tracing::error!("Error sending reply: {:?}", e);
-                                                        }
-                                                    }
+
                                                     if let Err(e) = message.ack().await {
                                                         tracing::error!(
                                                             "Error acknowledging message: {:?}",
@@ -139,27 +124,11 @@ impl Handle {
                                                 }
                                                 Err(e) => {
                                                     tracing::error!("Error processing message: {:?}", e);
-                                                    if let Err(e) = client
-                                                        .reply_err(
-                                                            crate::ReplyErrorMessage(Box::new(e)),
-                                                            message.clone().into(),
-                                                        )
-                                                        .await
-                                                    {
-                                                        tracing::error!(
-                                                            "Error sending error reply: {:?}",
-                                                            e
-                                                        );
-                                                    }
-                                                    if let Err(e) = message.ack().await {
-                                                        tracing::error!(
-                                                            "Error acknowledging message: {:?}",
-                                                            e
-                                                        );
+
+                                                    if let Err(e) = message.ack_with(jetstream::AckKind::Nak(None)).await {
+                                                        tracing::error!("Error NAK'ing message: {:?}", e);
                                                     } else {
-                                                        tracing::debug!(
-                                                            "Message acknowledged successfully."
-                                                        );
+                                                        tracing::debug!("Message NAk'd successfully.");
                                                     }
                                                 }
                                             }

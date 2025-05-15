@@ -47,6 +47,7 @@ impl JetStream {
     }
 
     /// Handles a delivery using the provided stream configuration and processor
+    #[instrument(skip_all)]
     pub async fn handle<R: MessageProcessor + Send + 'static + Sync>(
         &self,
         delivery: Delivery,
@@ -70,54 +71,6 @@ impl JetStream {
                 handle::Handle::push(self.clone(), consumer, processor).await
             }
         }
-    }
-
-    /// Sends a reply message
-    #[instrument(skip_all)]
-    pub async fn reply(&self, reply: ReplyMessage) -> Result<(), JetStreamError> {
-        trace!("Sending reply to: {}", reply.subject);
-        trace!("Reply payload size: {}", reply.payload.len());
-
-        match reply.headers {
-            Some(headers) => {
-                trace!("Reply has headers: {:?}", headers);
-                self.context
-                    .publish_with_headers(reply.subject.clone(), headers, reply.payload)
-                    .await?;
-            }
-            None => {
-                trace!("Reply has no headers");
-                self.context
-                    .publish(reply.subject.clone(), reply.payload)
-                    .await?;
-            }
-        }
-
-        trace!("Successfully sent reply to {}", reply.subject);
-        Ok(())
-    }
-
-    /// Sends an error reply message
-    #[instrument(skip_all)]
-    pub(crate) async fn reply_err(
-        &self,
-        err: crate::ReplyErrorMessage,
-        msg_source: Message,
-    ) -> Result<(), JetStreamError> {
-        trace!("Creating error reply message for source: {:?}", msg_source);
-        let reply = ReplyMessage {
-            subject: msg_source
-                .reply
-                .clone()
-                .unwrap_or_else(|| {
-                    trace!("No reply subject found in the source message");
-                    "".to_string().into()
-                })
-                .to_string(),
-            payload: err.0.to_string().into(),
-            headers: None,
-        };
-        self.reply(reply).await
     }
 }
 
@@ -149,36 +102,7 @@ pub trait PullFetcher {
 pub trait MessageProcessor {
     type Error: std::error::Error + Send + Sync + 'static;
     /// Processes a message and optionally returns a reply
-    async fn process(&self, msg: Message) -> Result<Option<ReplyMessage>, Self::Error>;
-}
-
-/// A structure that represents a reply message
-#[derive(Clone, Debug)]
-pub struct ReplyMessage {
-    pub subject: String,                        // Subject to reply to
-    pub payload: bytes::Bytes,                  // Payload of the reply
-    pub headers: Option<async_nats::HeaderMap>, // Optional headers
-}
-impl ReplyMessage {
-    /// Creates a new ReplyMessage
-    pub fn new(subject: String, payload: bytes::Bytes) -> Self {
-        trace!("Creating a new ReplyMessage for subject: {}", subject);
-        Self {
-            subject,
-            payload,
-            headers: None,
-        }
-    }
-}
-
-/// An easy-to-use function that creates a reply message
-pub fn reply(msg: &Message, payload: bytes::Bytes) -> ReplyMessage {
-    trace!("Creating a reply message for source message: {:?}", msg);
-    ReplyMessage {
-        subject: msg.reply.clone().unwrap_or_else(|| "".into()).to_string(),
-        payload,
-        headers: None,
-    }
+    async fn process(&self, msg: Message) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -194,17 +118,6 @@ impl std::ops::Deref for Message {
 impl std::ops::DerefMut for Message {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
-    }
-}
-impl Message {
-    /// Creates a reply message for the current message
-    pub fn reply(&self, payload: bytes::Bytes) -> ReplyMessage {
-        trace!("Creating a reply message for Message");
-        ReplyMessage {
-            subject: self.reply.clone().unwrap_or_else(|| "".into()).to_string(),
-            payload,
-            headers: None,
-        }
     }
 }
 

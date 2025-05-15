@@ -1,6 +1,6 @@
 [package]
 name = "nats-handling"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 authors = ["Oleg Pogoraev <contact@oblivisheee.me"]
 description = "An easy-to-use async NATS client library"
@@ -11,7 +11,7 @@ keywords = ["async", "nats", "client", "library"]
 categories = ["network-programming", "asynchronous"]
 
 [dependencies]
-async-nats = "0.40.0"
+async-nats = "0.41.0"
 async-trait = "0.1.88"
 bytes = "1.10.1"
 futures = "0.3.31"
@@ -22,5 +22,5 @@ tokio-util = "0.7.15"
 tracing = "0.1.41"
 
 [features]
-default = []
+default = ["jetstream"]
 jetstream = []
