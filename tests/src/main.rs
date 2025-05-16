@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use nats_handling::jetstream::{
     config::{PushConsumerConfig, StreamConfig},
+    handle::HandleConfig,
     Delivery,
 };
 use nats_handling::NatsClient;
@@ -68,7 +69,12 @@ async fn main() {
     let processor = MyProcessor;
 
     let handle = js
-        .handle(Delivery::Push(consumer_config), stream_config, processor)
+        .handle(
+            Delivery::Push(consumer_config),
+            stream_config,
+            processor,
+            HandleConfig::default(),
+        )
         .await
         .expect("Failed to start JetStream consumer");
 

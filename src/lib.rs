@@ -123,6 +123,7 @@ impl NatsClient {
         debug!("Sending request to subject: {}", subject);
 
         let response = self.client.send_request(subject.clone(), req).await?;
+
         debug!("Received response from {}", subject);
         Ok(Message(response))
     }

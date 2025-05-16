@@ -6,6 +6,7 @@ pub use async_nats::jetstream::Message as JSMessage;
 use async_nats::jetstream::{self, Context};
 use async_trait::async_trait;
 pub use handle::Handle;
+use std::sync::Arc;
 
 pub mod config {
     pub use consumer::{PullConsumerConfig, PushConsumerConfig};
@@ -53,6 +54,7 @@ impl JetStream {
         delivery: Delivery,
         stream_config: config::StreamConfig,
         processor: R,
+        handle_config: handle::HandleConfig,
     ) -> Result<handle::Handle, JetStreamError> {
         trace!(
             "Handling delivery with stream configuration: {:?}",
@@ -63,12 +65,12 @@ impl JetStream {
             Delivery::Pull((config, fetcher)) => {
                 trace!("Handling Pull delivery with config: {:?}", config);
                 let consumer = stream.create_consumer(config).await?;
-                handle::Handle::pull(self.clone(), consumer, fetcher, processor).await
+                handle::Handle::pull(consumer, fetcher, Arc::new(processor), handle_config).await
             }
             Delivery::Push(config) => {
                 trace!("Handling Push delivery with config: {:?}", config);
                 let consumer = stream.create_consumer(config).await?;
-                handle::Handle::push(self.clone(), consumer, processor).await
+                handle::Handle::push(consumer, Arc::new(processor), handle_config).await
             }
         }
     }
@@ -89,8 +91,10 @@ impl std::ops::DerefMut for JetStream {
 }
 
 pub enum Delivery {
-    Pull((config::PullConsumerConfig, Box<dyn PullFetcher>)), // Pull-based delivery
-    Push(config::PushConsumerConfig),                         // Push-based delivery
+    /// Pull-based delivery. First element is the consumer config, second is the fetcher.
+    Pull((config::PullConsumerConfig, Box<dyn PullFetcher>)),
+    /// Push-based delivery. First element is the consumer config.
+    Push(config::PushConsumerConfig), // Push-based delivery
 }
 
 pub trait PullFetcher {
