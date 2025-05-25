@@ -1,6 +1,6 @@
 [package]
 name = "nats-handling"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Oleg Pogoraev <contact@oblivisheee.me"]
 description = "An easy-to-use async NATS client library"

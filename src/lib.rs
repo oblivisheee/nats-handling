@@ -9,7 +9,7 @@ use async_nats::{Client, HeaderMap, Subscriber};
 use async_trait::async_trait;
 use bytes::Bytes;
 pub use error::Error;
-use futures::StreamExt;
+use futures::{stream::SelectAll, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, trace};
@@ -140,7 +140,6 @@ impl NatsClient {
         let subject = subject.to_string();
         let mut subscriber = self.subscribe(subject.clone()).await?;
 
-        let moved_processor = processor.clone();
         let moved_subject = subject.clone();
         let client_clone = self.clone();
         let cancel_token = CancellationToken::new();
@@ -154,7 +153,7 @@ impl NatsClient {
                 while let Some(message) = subscriber.next().await {
                 debug!("Processing message from subject: {}", message.subject);
                 trace!("Message payload size: {}", message.payload.len());
-                match moved_processor.process(Message(message.clone())).await {
+                match processor.process(Message(message.clone())).await {
                     Ok(reply) => {
                     debug!("Successfully processed message");
                     if let Some(reply) = reply {
@@ -258,14 +257,67 @@ impl NatsClient {
         subjects: impl IntoIterator<Item = String>,
         processor: R,
     ) -> Result<MultipleHandle, Error> {
-        let handles: Vec<Result<Handle, Error>> = futures::stream::iter(subjects)
-            .then(|subj| self.handle(subj.clone(), processor.clone()))
-            .collect::<Vec<_>>()
-            .await;
+        let mut merged = SelectAll::new();
+        for sub in subjects {
+            merged.push(self.subscribe(sub).await?);
+        }
 
-        let handles: Vec<Handle> = handles.into_iter().collect::<Result<_, _>>()?;
+        let client_clone = self.clone();
+        let cancel_token = CancellationToken::new();
+        let cancel_token_child = cancel_token.clone();
 
-        Ok(MultipleHandle { handles })
+        let handle = tokio::spawn(async move {
+            info!("Started message processing loop for multiple subjects");
+            let stop_signal = cancel_token_child.cancelled();
+            tokio::select! {
+                _ = async {
+                    while let Some(message) = merged.next().await {
+                        debug!("Processing message from subject: {}", message.subject);
+                        trace!("Message payload size: {}", message.payload.len());
+                        match processor.process(Message(message.clone())).await {
+                            Ok(reply) => {
+                                debug!("Successfully processed message");
+                                if let Some(reply) = reply {
+                                    debug!("Sending reply: {:?}", reply);
+                                    if let Err(e) = client_clone.reply(reply).await {
+                                        error!("Failed to reply to message: {}", e);
+                                    }
+                                } else {
+                                    debug!("No reply needed");
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to process message: {}", e);
+                                if let Err(e) = client_clone
+                                    .reply_err(ReplyErrorMessage(Box::new(e)), Message(message.clone()))
+                                    .await
+                                {
+                                    error!("Failed to reply to message: {}", e);
+                                }
+                            }
+                        }
+                    }
+                } => {},
+                _ = stop_signal => {
+                    info!("Cancellation requested for multiple subject handler");
+                   for mut sub in merged {
+                        if let Err(e) = sub.unsubscribe().await {
+                            error!("Failed to unsubscribe from subject: {}", e);
+                        } else {
+                            info!("Successfully unsubscribed from subject");
+                        }
+                    }
+                    info!("All subscriptions have been unsubscribed.");
+                }
+            }
+        });
+
+        Ok(MultipleHandle {
+            handle: Handle {
+                cancel: cancel_token,
+                handle: Some(handle),
+            },
+        })
     }
     /// Returns the default timeout for requests set when creating the client.
     #[instrument(skip_all)]
@@ -355,22 +407,19 @@ impl NatsClient {
 /// A structure that handles multiple NATS subject and responds to messages
 #[derive(Debug)]
 pub struct MultipleHandle {
-    handles: Vec<Handle>,
+    handle: Handle,
 }
 
 impl MultipleHandle {
     /// Closes all subscriptions
     #[instrument(skip_all)]
     pub async fn shutdown(self) -> Result<(), Error> {
-        for handle in self.handles {
-            handle.shutdown().await;
-        }
+        self.handle.shutdown().await;
+
         Ok(())
     }
     pub async fn abort(&mut self) {
-        for handle in self.handles.iter_mut() {
-            handle.abort().await;
-        }
+        self.handle.abort().await;
     }
 }
 
@@ -421,12 +470,9 @@ impl Message {
     }
 }
 
-#[deprecated(note = "Please use MessageProcessor instead")]
-pub type RequestProcessor = dyn MessageProcessor;
-
 /// A trait that defines a request processor for NATS messages
 #[async_trait]
-pub trait MessageProcessor: Send + Sync + Clone {
+pub trait MessageProcessor: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
     async fn process(&self, message: Message) -> Result<Option<ReplyMessage>, Self::Error>;
 }
