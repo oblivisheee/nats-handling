@@ -3,18 +3,16 @@
 pub mod error;
 pub mod handler;
 pub mod messages;
-pub mod options;
 
 #[cfg(feature = "jetstream")]
 pub mod jetstream;
 
+pub use async_nats::ConnectOptions;
 pub use async_nats::Request;
 pub use async_nats::{HeaderMap, HeaderName, HeaderValue};
 pub use error::Error;
 pub use messages::{Message, MessageProcessor, ReplyMessage};
-pub use options::ConnectOptions;
 
-use async_nats::ConnectOptions as NatsConnectOptions;
 use async_nats::{Client, Subscriber};
 use bytes::Bytes;
 use futures::{stream::SelectAll, StreamExt};
@@ -47,7 +45,7 @@ impl NatsClient {
     #[instrument(skip_all)]
     pub async fn new(bind: &[&str]) -> Result<Self, Error> {
         info!("Connecting to NATS server at {:?}", bind);
-        let client = NatsConnectOptions::new().connect(bind).await?;
+        let client = ConnectOptions::new().connect(bind).await?;
         info!("Successfully connected to NATS server");
         Ok(Self { client })
     }
@@ -60,10 +58,7 @@ impl NatsClient {
 
     /// Creates a new NATS client with specified options and connects to the server
     #[instrument(skip_all)]
-    pub(crate) async fn with_options(
-        bind: &[&str],
-        options: NatsConnectOptions,
-    ) -> Result<Self, Error> {
+    pub async fn with_options(bind: &[&str], options: ConnectOptions) -> Result<Self, Error> {
         info!("Connecting to NATS server at {:?}", bind);
 
         let client = options.connect(bind).await?;
