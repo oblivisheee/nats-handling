@@ -20,4 +20,6 @@ pub enum Error {
     DrainError(#[from] async_nats::client::DrainError),
     #[error("Reconnect error: {0}")]
     ReconnectError(#[from] async_nats::client::ReconnectError),
+    #[error("Serde serialization error: {0}")]
+    SerdeSerializationError(#[from] serde_json::Error),
 }

@@ -28,6 +28,7 @@ impl Handle {
 
         let handle = tokio::spawn(async move {
             let stream = messages;
+
             let stop_signal = cancel_token_child.cancelled();
             tokio::select! {
                 _ = async {

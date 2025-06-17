@@ -1,21 +1,31 @@
 //! Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
 //! The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
 pub mod error;
+pub mod handler;
+pub mod messages;
+pub mod options;
+
 #[cfg(feature = "jetstream")]
 pub mod jetstream;
-pub use async_nats::ConnectOptions;
+
 pub use async_nats::Request;
-use async_nats::{Client, HeaderMap, Subscriber};
-use async_trait::async_trait;
-use bytes::Bytes;
+pub use async_nats::{HeaderMap, HeaderName, HeaderValue};
 pub use error::Error;
+pub use messages::{Message, MessageProcessor, ReplyMessage};
+pub use options::ConnectOptions;
+
+use async_nats::ConnectOptions as NatsConnectOptions;
+use async_nats::{Client, Subscriber};
+use bytes::Bytes;
 use futures::{stream::SelectAll, StreamExt};
+use messages::ReplyErrorMessage;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, trace};
 
 /// A structure that handles specified NATS subject and responds to messages
 #[derive(Debug)]
+#[must_use]
 pub struct Handle {
     cancel: CancellationToken,
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -37,7 +47,7 @@ impl NatsClient {
     #[instrument(skip_all)]
     pub async fn new(bind: &[&str]) -> Result<Self, Error> {
         info!("Connecting to NATS server at {:?}", bind);
-        let client = ConnectOptions::new().connect(bind).await?;
+        let client = NatsConnectOptions::new().connect(bind).await?;
         info!("Successfully connected to NATS server");
         Ok(Self { client })
     }
@@ -50,7 +60,10 @@ impl NatsClient {
 
     /// Creates a new NATS client with specified options and connects to the server
     #[instrument(skip_all)]
-    pub async fn with_options(bind: &[&str], options: ConnectOptions) -> Result<Self, Error> {
+    pub(crate) async fn with_options(
+        bind: &[&str],
+        options: NatsConnectOptions,
+    ) -> Result<Self, Error> {
         info!("Connecting to NATS server at {:?}", bind);
 
         let client = options.connect(bind).await?;
@@ -138,55 +151,19 @@ impl NatsClient {
         let subject = subject.as_ref().to_owned();
         info!("Setting up handler for subject: {}", subject);
         let subject = subject.to_string();
-        let mut subscriber = self.subscribe(subject.clone()).await?;
+        let subscriber = self.subscribe(subject.clone()).await?;
 
         let moved_subject = subject.clone();
         let client_clone = self.clone();
         let cancel_token = CancellationToken::new();
         let cancel_token_child = cancel_token.clone();
-
-        let handle = tokio::spawn(async move {
-            info!("Started message processing loop for {}", moved_subject);
-            let stop_signal = cancel_token_child.cancelled();
-            tokio::select! {
-            _ = async {
-                while let Some(message) = subscriber.next().await {
-                debug!("Processing message from subject: {}", message.subject);
-                trace!("Message payload size: {}", message.payload.len());
-                match processor.process(Message(message.clone())).await {
-                    Ok(reply) => {
-                    debug!("Successfully processed message");
-                    if let Some(reply) = reply {
-                        debug!("Sending reply: {:?}", reply);
-                        if let Err(e) = client_clone.reply(reply).await {
-                            error!("Failed to reply to message: {}", e);
-                        }
-                    } else {
-                        debug!("No reply needed");
-                    }
-
-                    }
-                    Err(e) => {
-                    error!("Failed to process message: {}", e);
-                    if let Err(e) = client_clone
-                        .reply_err(ReplyErrorMessage(Box::new(e)), Message(message.clone()))
-                        .await
-                    {
-                        error!("Failed to reply to message: {}", e);
-                    }
-                    }
-                }
-                }
-            } => {},
-            _ = stop_signal => {
-                if let Err(e) = subscriber.unsubscribe().await {
-                error!("Failed to unsubscribe from {}: {}", moved_subject, e);
-                } else {
-                info!("Successfully unsubscribed from {}", moved_subject);
-                }
-            }
-            }
-        });
+        let handle = tokio::spawn(handler::run_handler(
+            subscriber,
+            client_clone,
+            processor,
+            cancel_token_child,
+            moved_subject,
+        ));
 
         Ok(Handle {
             cancel: cancel_token,
@@ -234,17 +211,23 @@ impl NatsClient {
     /// Sends an error reply to a message
     #[instrument(skip_all)]
     async fn reply_err(&self, err: ReplyErrorMessage, msg_source: Message) -> Result<(), Error> {
+        #[derive(Serialize, Deserialize, Debug)]
+        pub struct ReplyErrorMessagePayload {
+            pub error: String,
+        }
         trace!("Creating error reply message");
         let reply = ReplyMessage {
             subject: msg_source
                 .reply
                 .clone()
                 .unwrap_or_else(|| {
-                    eprint!("No reply subject");
+                    error!("No reply subject");
                     "".to_string().into()
                 })
                 .to_string(),
-            payload: err.0.to_string().into(),
+            payload: Bytes::from(serde_json::to_string(&ReplyErrorMessagePayload {
+                error: err.0.to_string(),
+            })?),
             headers: None,
             reply: None,
         };
@@ -406,6 +389,7 @@ impl NatsClient {
 
 /// A structure that handles multiple NATS subject and responds to messages
 #[derive(Debug)]
+#[must_use]
 pub struct MultipleHandle {
     handle: Handle,
 }
@@ -441,81 +425,5 @@ impl Handle {
         if let Some(handle) = self.handle.take() {
             handle.abort();
         }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Message(async_nats::Message);
-
-impl std::ops::Deref for Message {
-    type Target = async_nats::Message;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl std::ops::DerefMut for Message {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl Message {
-    pub fn reply(&self, payload: Bytes) -> ReplyMessage {
-        ReplyMessage {
-            subject: self.reply.clone().unwrap_or_else(|| "".into()).to_string(),
-            payload,
-            headers: None,
-            reply: None,
-        }
-    }
-}
-
-/// A trait that defines a request processor for NATS messages
-#[async_trait]
-pub trait MessageProcessor: Send + Sync {
-    type Error: std::error::Error + Send + Sync + 'static;
-    async fn process(&self, message: Message) -> Result<Option<ReplyMessage>, Self::Error>;
-}
-
-/// A structure that represents a reply message
-#[derive(Clone, Debug)]
-pub struct ReplyMessage {
-    pub reply: Option<String>,
-    pub subject: String,
-    pub payload: Bytes,
-    pub headers: Option<HeaderMap>,
-}
-impl ReplyMessage {
-    pub fn new(subject: String, payload: Bytes) -> Self {
-        Self {
-            reply: None,
-            subject,
-            payload,
-            headers: None,
-        }
-    }
-}
-//TODO: Fix sending custom PublishMessage natively via method
-// impl Into<async_nats::PublishMessage> for ReplyMessage {
-//     fn into(self) -> async_nats::PublishMessage {
-//         async_nats::PublishMessage {
-//             subject: self.subject.into(),
-//             payload: self.payload,
-//             reply: self.reply.map(|s| s.into()),
-//             headers: self.headers,
-//         }
-//     }
-// }
-
-/// A structure that represents an error reply message
-struct ReplyErrorMessage(pub Box<dyn std::error::Error + Send + Sync>);
-
-/// An easy-to-use function that creates a reply message
-pub fn reply(msg: &Message, payload: Bytes) -> ReplyMessage {
-    ReplyMessage {
-        subject: msg.reply.clone().unwrap_or_else(|| "".into()).to_string(),
-        payload,
-        headers: None,
-        reply: None,
     }
 }

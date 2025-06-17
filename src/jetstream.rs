@@ -84,12 +84,6 @@ impl std::ops::Deref for JetStream {
     }
 }
 
-impl std::ops::DerefMut for JetStream {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.context
-    }
-}
-
 pub enum Delivery {
     /// Pull-based delivery. First element is the consumer config, second is the fetcher.
     Pull((config::PullConsumerConfig, Box<dyn PullFetcher>)),
@@ -125,15 +119,13 @@ impl std::ops::DerefMut for Message {
     }
 }
 
-impl Into<Message> for async_nats::Message {
-    fn into(self) -> Message {
-        trace!("Converting async_nats::Message into Message");
-        Message(self)
+impl From<async_nats::jetstream::Message> for Message {
+    fn from(msg: async_nats::jetstream::Message) -> Self {
+        Message(msg.into())
     }
 }
-impl Into<Message> for async_nats::jetstream::Message {
-    fn into(self) -> Message {
-        trace!("Converting async_nats::jetstream::Message into Message");
-        Message(self.into())
+impl From<async_nats::Message> for Message {
+    fn from(msg: async_nats::Message) -> Self {
+        Message(msg)
     }
 }
