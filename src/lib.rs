@@ -1,11 +1,13 @@
 //! Nats Handling is a library designed for seamless NATS message handling in Rust. It offers a straightforward API for subscribing to NATS subjects, processing messages, and sending replies.
 //! The goal of this library is to provide an experience similar to HTTP handling, but tailored for NATS.
 pub mod error;
-pub mod handler;
+pub mod handle;
 pub mod messages;
 
 #[cfg(feature = "jetstream")]
 pub mod jetstream;
+
+use std::sync::Arc;
 
 pub use async_nats::ConnectOptions;
 pub use async_nats::Request;
@@ -22,11 +24,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, trace};
 
 /// A structure that handles specified NATS subject and responds to messages
-#[derive(Debug)]
 #[must_use]
 pub struct Handle {
-    cancel: CancellationToken,
-    handle: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) cancel: CancellationToken,
+    pub(crate) handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for Handle {
@@ -136,6 +137,44 @@ impl NatsClient {
         Ok(Message(response))
     }
 
+    #[instrument(skip_all)]
+    pub async fn handle_fn<F, Fut>(
+        &self,
+        subject: impl AsRef<str>,
+        processor: F,
+    ) -> Result<Handle, Error>
+    where
+        F: Fn(Message) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<
+                Output = Result<Option<ReplyMessage>, Box<dyn std::error::Error + Send + Sync>>,
+            > + Send
+            + 'static,
+    {
+        struct FunctionProcessor<F> {
+            func: F,
+        }
+        #[async_trait::async_trait]
+        impl<F, Fut> MessageProcessor for FunctionProcessor<F>
+        where
+            F: Fn(Message) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<
+                    Output = Result<Option<ReplyMessage>, Box<dyn std::error::Error + Send + Sync>>,
+                > + Send
+                + 'static,
+        {
+            type Error = Arc<dyn std::error::Error + Send + Sync>;
+
+            async fn process(&self, message: Message) -> Result<Option<ReplyMessage>, Self::Error> {
+                (self.func)(message)
+                    .await
+                    .map_err(|e| Arc::<dyn std::error::Error + Send + Sync>::from(e))
+            }
+        }
+
+        self.handle(subject, FunctionProcessor { func: processor })
+            .await
+    }
+
     /// Handles a specified NATS subject and processes messages using the provided processor
     #[instrument(skip_all)]
     pub async fn handle<R: MessageProcessor + 'static>(
@@ -152,14 +191,13 @@ impl NatsClient {
         let client_clone = self.clone();
         let cancel_token = CancellationToken::new();
         let cancel_token_child = cancel_token.clone();
-        let handle = tokio::spawn(handler::run_handler(
+        let handle = tokio::spawn(handle::run_handler(
             subscriber,
             client_clone,
             processor,
             cancel_token_child,
             moved_subject,
         ));
-
         Ok(Handle {
             cancel: cancel_token,
             handle: Some(handle),
@@ -383,7 +421,6 @@ impl NatsClient {
 }
 
 /// A structure that handles multiple NATS subject and responds to messages
-#[derive(Debug)]
 #[must_use]
 pub struct MultipleHandle {
     handle: Handle,
